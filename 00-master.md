@@ -3,9 +3,9 @@
 ## 1. Project Meta
 
 - **Name:** moodle-local-digistore24
-- **Goal:** 
-- **Short Description:** Moodle local plugin integrating Digistore24.
-- **Tech Stack:** Moodle (PHP), Digistore24 API
+- **Goal:** Connect Moodle's payment subsystem to Digistore24 so that paid enrolments (and other Moodle payment areas) can be processed via Digistore24 as a payment provider.
+- **Short Description:** Moodle plugin that integrates Digistore24 as a payment gateway for Moodle's core payment API.
+- **Tech Stack:** Moodle 5.x (PHP), Moodle Payment subsystem (`core_payment` / `paygw_*`), Digistore24 API & IPN
 
 ---
 
