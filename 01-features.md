@@ -95,56 +95,63 @@ Allow Moodle administrators to offer Digistore24 as a payment method for any Moo
 ---
 
 **Behavior**  
-Main flow:
+Main flow (one-off payment):
 
-1. Admin installs the plugin and enters Digistore24 credentials (API key, IPN passphrase, product mapping strategy) in site settings.
+1. Admin installs the plugin and enters Digistore24 credentials (full-access API key, IPN passphrase, default Digistore24 product id) in site settings.
 2. Admin creates a Moodle payment account and enables the Digistore24 gateway on it.
-3. Course editor attaches a fee (via `enrol_fee` or similar) to the course and links the payment account.
-4. Learner opens the course, clicks "Pay", chooses Digistore24.
-5. Moodle creates a pending payment record and redirects the learner to the matching Digistore24 product/checkout URL (with order reference = Moodle payment id).
+3. A Moodle payable item (course `enrol_fee`, activity, or other `core_payment` component) is attached to the payment account. Optionally, a `digistore24_product_id` override is set at item level; otherwise the site-wide default product is used.
+4. Learner clicks "Pay", chooses Digistore24.
+5. Moodle creates a pending payment record. The plugin calls Digistore24 `createBuyUrl` with the resolved product id, Moodle-controlled price/currency, pre-filled read-only buyer data (from the Moodle user), `custom = payment.id`, and Moodle-side thank-you + IPN URLs, then redirects the learner to the returned signed URL.
 6. Learner completes payment on Digistore24.
-7. Digistore24 sends an IPN to a Moodle callback endpoint. The plugin verifies the IPN signature/passphrase, matches the order reference to the pending payment, and marks it `delivered`.
-8. Moodle's payment subsystem triggers the enrolment (or other `component` callback) for that payable item.
-9. Learner returns to Moodle via Digistore24's thank-you redirect and sees the paid/enrolled state.
+7. Digistore24 POSTs an IPN to the Moodle callback endpoint. The plugin validates the SHA-passphrase signature, matches `custom` to the pending Moodle `payment.id`, verifies amount + currency, and marks the payment `delivered`.
+8. Moodle's payment subsystem triggers the component's delivery callback — e.g. `enrol_fee` enrols the user in the course.
+9. Learner returns to Moodle via Digistore24's thank-you redirect and sees the paid / enrolled state.
 
-Edge cases to define:
-- IPN arrives before the user returns (normal) — user must see consistent state.
-- User abandons checkout — payment stays pending; no enrolment.
-- Refund / chargeback IPN — reverse the enrolment (policy TBD).
-- Duplicate IPN for the same order — idempotent; no double enrolment.
-- Currency/amount mismatch between Moodle and Digistore24 product — reject and log.
-- Multiple currencies supported by Digistore24 product mapping.
+Subscription flow (recurring):
+
+- `createBuyUrl` is called with a `payment_plan` so Digistore24 sets up a subscription.
+- Each recurring charge produces its own IPN; the plugin marks the corresponding Moodle payment for that period as delivered and extends access.
+- A cancellation or failed rebill IPN ends access (timing per the open question on lifecycle).
+
+Refund / chargeback flow:
+
+- A refund / chargeback IPN triggers reversal: the plugin marks the payment reversed and invokes the component's reversal path (for `enrol_fee`: unenrol the user). The action is logged and visible to admins.
+
+Edge cases:
+- IPN arrives before the user returns (normal case) — learner must see a consistent "paid" state on return.
+- User abandons checkout — payment stays pending; no enrolment; Moodle can time out / clean up pending rows eventually.
+- Duplicate IPN for the same order — idempotent; no double enrolment, no double refund.
+- Amount or currency in IPN does not match the Moodle payable item — reject, log, do not deliver.
+- `createBuyUrl` call fails — show the learner a clear error and keep the Moodle payment pending; do not redirect to a broken checkout.
+- IPN signature invalid — reject (HTTP 400), log, never mark delivered.
 
 ---
 
 **Non-goals**  
-- Replacing Digistore24's own checkout UI (Moodle redirects out).
-- Implementing subscriptions/recurring billing in the first iteration (unless confirmed in scope).
-- Handling affiliate management inside Moodle.
-- Issuing invoices from Moodle (Digistore24 is the merchant of record).
+- Replacing Digistore24's own checkout UI (Moodle always redirects out).
+- Handling affiliate management inside Moodle (stays in Digistore24).
+- Issuing invoices from Moodle — Digistore24 is the Merchant of Record and owner of the tax/VAT flow.
 
 ---
 
 **Decisions**  
-- Implemented as a Moodle payment gateway plugin of type `paygw` → plugin name `paygw_digistore24`, path `payment/gateway/digistore24`. (Confirms to Moodle 5.x payment plugin contract.)
+- Plugin type `paygw` → plugin name `paygw_digistore24`, path `payment/gateway/digistore24`; target **Moodle 5.2**.
 - Server-to-server IPN is authoritative for marking payments complete; browser redirect only updates UX.
-- Order reference = Moodle `payment.id` (or a hashed form) so IPNs can be matched reliably.
+- Order reference = Moodle `payment.id`, passed through Digistore24's `custom` parameter (≤ 127 chars) so every IPN can be matched to a pending Moodle payment.
+- **Checkout surface: `createBuyUrl` API (option 1b).** For each Moodle payment, the plugin calls `createBuyUrl` server-side to obtain a signed, short-lived Digistore24 checkout URL with Moodle-controlled price, currency, buyer data (read-only) and thank-you/IPN URLs. No static product-URL fallback.
+- **Product mapping: hybrid (option 2c).** A site-wide default Digistore24 product is configured in the plugin settings. Any Moodle payable item (course/activity/etc.) can optionally override it with its own `digistore24_product_id`. Missing override → fall back to the default product; price/title are set dynamically via `createBuyUrl` in both cases.
+- **Scope of payment areas: generic (option 3B).** The plugin works for any `core_payment` component (`enrol_fee`, activities, custom). v1 release notes document `enrol_fee` as the primary tested path; other areas are technically supported from day one.
+- **Refund / chargeback: auto-unenrol (option 4).** On a refund / chargeback IPN from Digistore24, the plugin reverses the corresponding Moodle payment and calls the component's reversal path (for `enrol_fee`: unenrol the user from the course). Action is logged and visible to admins.
+- **Currencies & tax (option 5): Digistore24 is authoritative.** Moodle displays the price set on the Moodle payable item; Digistore24 handles VAT calculation, country-based tax rules and invoicing as Merchant of Record. The plugin does not add or recalculate tax on Moodle's side.
+- **Subscriptions (option 6): in scope for v1.** The plugin supports Digistore24 payment plans / recurring billing. Each recurring IPN marks the next period paid; Moodle grants / extends access accordingly. Cancellation or failed rebill → access ends at the end of the paid period (or immediately on chargeback).
 
 ---
 
-**Open Questions**  
-Awaiting more info from the product owner. Where Digistore24 gives us a choice, the options are listed explicitly:
+**Open Questions**
 
-1. **Checkout surface** — two realistic options, pick one as v1:
-   - (a) **Static hosted checkout** `https://www.checkout-ds24.com/product/{product_id}/?custom={moodle_payment_id}` — simplest, requires one Digistore24 product per Moodle priceable item.
-   - (b) **Dynamic `createBuyUrl` API** — lets us pre-fill buyer data, override price, set thank-you/IPN URLs per order; requires a full-access API key on the server.
-2. **Product mapping** — one Digistore24 product per Moodle course (manual mapping in course settings), or one generic Digistore24 product with price set dynamically via `createBuyUrl`?
-3. **Scope of payment areas** — only `enrol_fee` in v1, or also other `core_payment` components (e.g. enrolment plugins, activities, custom)?
-4. **Refund / chargeback behaviour** — on Digistore24 refund IPN, should Moodle auto-unenrol (and for how far back), or only flag for admin review?
-5. **Currencies / tax** — which currencies do we need to support? Does Digistore24 handle VAT on our behalf (Merchant of Record)? What does Moodle need to display?
-6. **Subscriptions / recurring** — required in v1 (payment plans, billing-on-demand) or out of scope until later?
-7. **Target Moodle version** — 5.0 / 5.1 / 5.2? Pin one; the `paygw` contract shifts between versions.
-8. **API key type** — do we store a single site-wide API key (admin setting), or use a `developer` key and let each vendor connect their own account?
+1. **API key scope** — the `createBuyUrl` + IPN + refund flow requires a full-access Digistore24 API key. Default assumption: **one site-wide API key** stored in admin settings (admin setting, not per-user, not per-course). Confirm this is acceptable, or whether a multi-vendor setup (each admin connects their own Digistore24 account) is required.
+2. **Subscription lifecycle details** — on failed rebill, should access end immediately, at period end, or after a configurable grace period? On user-initiated cancellation in Digistore24, same question.
+3. **Which Moodle payable items get the `digistore24_product_id` override UI** — course-level `enrol_fee` only (v1), or also activity-level and custom components? (Does not block v1 release; affects admin UX.)
 
 ---
 

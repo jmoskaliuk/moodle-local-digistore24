@@ -97,10 +97,13 @@ Describe how data moves through the system:
 ## External Dependencies
 
 ### Moodle Payment subsystem (`core_payment`)
+- Target: **Moodle 5.2**.
 - Plugin type: `paygw` → plugin name `paygw_digistore24`, path `payment/gateway/digistore24`.
 - Must implement Moodle's standard gateway contract (`gateway`, AMD JS entry point, external service endpoints, lang strings, settings, `version.php`).
-- Payment completion must call Moodle's payment API to mark the payable item as paid so `component` callbacks (e.g. `enrol_fee`) grant access.
-- Concrete class/method details to be verified against the Moodle 5.x developer docs before implementation (fetch currently blocked by docs.moodle.org / moodledev.io from this environment).
+- Works generically for any `core_payment` component (`enrol_fee`, activities, custom). v1 QA focuses on `enrol_fee`; other components are technically supported.
+- Payment completion must call Moodle's payment API to mark the payable item as paid so the `component`'s delivery callback (e.g. enrolment for `enrol_fee`) runs.
+- Refund / chargeback must invoke the component's reversal path (e.g. unenrol for `enrol_fee`).
+- Concrete class/method signatures must be verified against the Moodle 5.2 developer docs before implementation (docs.moodle.org / moodledev.io currently blocked from this environment — verify during task `#plan`).
 
 ### Digistore24 API
 Facts collected from Digistore24 developer docs (via web search — see README/source links in commits):
@@ -110,10 +113,18 @@ Facts collected from Digistore24 developer docs (via web search — see README/s
 - **Response formats**: `Accept: application/json` by default; `text/plain`, `text/xml`, `application/php` also supported.
 - **API key types**: `readonly` (reads only), `developer` (publishable, lets an app generate per-user keys), and full-access keys (never to be published).
 - **Relevant API functions** (from API reference A–Z): `createBuyUrl`, `getPurchase`, `createBillingOnDemand`, refund-related calls, plus others TBD.
-- **Hosted checkout URL**: `https://www.checkout-ds24.com/product/{product_id}/` — accepts GET parameters to pre-fill buyer data and carry a `custom` parameter (≤ 127 chars) that is forwarded to both the thank-you page and the IPN call. This is the primary mechanism to correlate a Digistore24 order with a Moodle `payment.id`.
-- **Buy URL via API**: `createBuyUrl(product_id, buyer, payment_plan, tracking, valid_until, urls, placeholders, settings, addons)` — produces a signed, one-shot checkout URL when we need dynamic pricing, pre-filled buyer data or read-only fields.
-- **IPN (Instant Payment Notification)**: Digistore24 POSTs to our configured IPN URL; payload is signed with our `SHA_PASSPHRASE`; we must validate the signature before trusting the data. One IPN per payment (a 3-product purchase → 3 IPNs).
-- **Test mode**: Digistore24 supports test purchases; we need to verify the same IPN/signature path runs for test orders.
+- **Chosen integration path**: `createBuyUrl` (called server-side per Moodle payment). The static `https://www.checkout-ds24.com/product/{id}/` URL is *not* used.
+- **`createBuyUrl(product_id, buyer, payment_plan, tracking, valid_until, urls, placeholders, settings, addons)`** — produces a signed, one-shot checkout URL. Used by the plugin with:
+  - `product_id` = per-item override `digistore24_product_id` if set, else the site-wide default from plugin settings (hybrid mapping).
+  - `buyer` = Moodle user data (email, first/last name, country); passed read-only via `settings` so the buyer cannot change it at checkout.
+  - Moodle-controlled price / currency for the payable item.
+  - `payment_plan` = recurring terms when the Moodle payable item is a subscription.
+  - `tracking.custom` = Moodle `payment.id` (≤ 127 chars) — this is the correlation key returned in every IPN.
+  - `urls.thankyou_url` and `urls.notification_url` overridden to Moodle endpoints per order.
+  - `valid_until` = short (e.g. 24 h) so stale links can't be reused.
+- **IPN**: Digistore24 POSTs to the Moodle notification URL; payload is signed with the plugin's `SHA_PASSPHRASE`; signature must be validated before any side effect. One IPN per payment (a 3-product purchase → 3 IPNs; each recurring charge → its own IPN).
+- **Refund / chargeback IPNs** are a distinct event type on the same endpoint → reverse the matching Moodle payment and run the component's reversal path.
+- **Test mode**: Digistore24 supports test purchases; verify the IPN signature path runs identically for test orders.
 
 ---
 
@@ -121,9 +132,11 @@ Facts collected from Digistore24 developer docs (via web search — see README/s
 
 - Server-to-server IPN is authoritative for marking a Moodle payment as delivered; the user's browser return is for UX only.
 - The `custom` parameter in Digistore24 is limited to 127 characters — Moodle payment ids (bigint) fit comfortably, but any additional context must stay under that budget.
-- Duplicate IPNs must be handled idempotently (network retries, refund reversals).
-- Currency and amount from the IPN must be compared to the Moodle payable item; mismatch → reject and log.
-- Moodle payment gateway class/method names and JS contract are version-sensitive (5.0/5.1/5.2) — pin a target version before coding.
+- Duplicate IPNs must be handled idempotently (network retries, refund reversals, recurring charges).
+- Currency and amount from the IPN must be compared to the Moodle payable item; mismatch → reject and log, do not deliver.
+- A full-access Digistore24 API key is required server-side for `createBuyUrl`. Storage: Moodle admin setting, treated as a secret (no logging, no client exposure).
+- Moodle payment gateway class/method names and JS contract are version-specific — pinned to **Moodle 5.2**; verify against moodledev.io during `#plan`.
+- Tax / VAT is handled entirely by Digistore24 (Merchant of Record). The plugin does not add, calculate or display tax on Moodle's side.
 
 ---
 
