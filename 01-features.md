@@ -133,15 +133,18 @@ Edge cases to define:
 ---
 
 **Open Questions**  
-Awaiting more info from the product owner:
+Awaiting more info from the product owner. Where Digistore24 gives us a choice, the options are listed explicitly:
 
-- Which Digistore24 integration surface: hosted checkout URL per product, or Digistore24 API for dynamic orders?
-- Mapping: one Digistore24 product per Moodle course, or one generic product with dynamic price?
-- Scope of payment areas: only `enrol_fee`, or also other Moodle paid components?
-- Refund behaviour: auto-unenrol on refund, or manual?
-- Supported currencies and tax handling.
-- Is subscription / recurring support required now or later?
-- Specific Moodle version target (5.0 / 5.1 / 5.2?).
+1. **Checkout surface** — two realistic options, pick one as v1:
+   - (a) **Static hosted checkout** `https://www.checkout-ds24.com/product/{product_id}/?custom={moodle_payment_id}` — simplest, requires one Digistore24 product per Moodle priceable item.
+   - (b) **Dynamic `createBuyUrl` API** — lets us pre-fill buyer data, override price, set thank-you/IPN URLs per order; requires a full-access API key on the server.
+2. **Product mapping** — one Digistore24 product per Moodle course (manual mapping in course settings), or one generic Digistore24 product with price set dynamically via `createBuyUrl`?
+3. **Scope of payment areas** — only `enrol_fee` in v1, or also other `core_payment` components (e.g. enrolment plugins, activities, custom)?
+4. **Refund / chargeback behaviour** — on Digistore24 refund IPN, should Moodle auto-unenrol (and for how far back), or only flag for admin review?
+5. **Currencies / tax** — which currencies do we need to support? Does Digistore24 handle VAT on our behalf (Merchant of Record)? What does Moodle need to display?
+6. **Subscriptions / recurring** — required in v1 (payment plans, billing-on-demand) or out of scope until later?
+7. **Target Moodle version** — 5.0 / 5.1 / 5.2? Pin one; the `paygw` contract shifts between versions.
+8. **API key type** — do we store a single site-wide API key (admin setting), or use a `developer` key and let each vendor connect their own account?
 
 ---
 
