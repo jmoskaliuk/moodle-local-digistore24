@@ -143,15 +143,16 @@ Edge cases:
 - **Scope of payment areas: generic (option 3B).** The plugin works for any `core_payment` component (`enrol_fee`, activities, custom). v1 release notes document `enrol_fee` as the primary tested path; other areas are technically supported from day one.
 - **Refund / chargeback: auto-unenrol (option 4).** On a refund / chargeback IPN from Digistore24, the plugin reverses the corresponding Moodle payment and calls the component's reversal path (for `enrol_fee`: unenrol the user from the course). Action is logged and visible to admins.
 - **Currencies & tax (option 5): Digistore24 is authoritative.** Moodle displays the price set on the Moodle payable item; Digistore24 handles VAT calculation, country-based tax rules and invoicing as Merchant of Record. The plugin does not add or recalculate tax on Moodle's side.
-- **Subscriptions (option 6): in scope for v1.** The plugin supports Digistore24 payment plans / recurring billing. Each recurring IPN marks the next period paid; Moodle grants / extends access accordingly. Cancellation or failed rebill → access ends at the end of the paid period (or immediately on chargeback).
+- **Subscriptions (option 6): in scope for v1.** The plugin supports Digistore24 payment plans / recurring billing. Each recurring IPN marks the next period paid; Moodle grants / extends access accordingly.
+- **API key scope: site-wide.** A single full-access Digistore24 API key is stored as an admin setting and used for all Moodle payable items. No per-vendor / per-course key. Treated as a secret: never logged, never sent to the client.
+- **Subscription end on failed rebill / cancellation: end of paid period plus a configurable admin grace period.** The plugin keeps access until `period_end + grace_period_days`. Default grace period: 3 days (admin-configurable). Hard chargeback / refund still ends access immediately via the refund flow.
+- **Product-id override UI: all payable items.** The optional `digistore24_product_id` override is exposed wherever a Moodle payable item exists — `enrol_fee` (course level), activity payment instances, and custom `core_payment` components — via the standard payment-area form extension Moodle provides for gateway plugins.
 
 ---
 
 **Open Questions**
 
-1. **API key scope** — the `createBuyUrl` + IPN + refund flow requires a full-access Digistore24 API key. Default assumption: **one site-wide API key** stored in admin settings (admin setting, not per-user, not per-course). Confirm this is acceptable, or whether a multi-vendor setup (each admin connects their own Digistore24 account) is required.
-2. **Subscription lifecycle details** — on failed rebill, should access end immediately, at period end, or after a configurable grace period? On user-initiated cancellation in Digistore24, same question.
-3. **Which Moodle payable items get the `digistore24_product_id` override UI** — course-level `enrol_fee` only (v1), or also activity-level and custom components? (Does not block v1 release; affects admin UX.)
+None. Feature is ready for `#plan` (task breakdown in `04-tasks.md`).
 
 ---
 
