@@ -136,18 +136,21 @@ Describe how data moves through the system:
 **IPN endpoint** (no Moodle abstraction — our own):
 - Moodle provides no gateway-callback framework; PayPal is synchronous via the modal. For Digistore24 we add a standalone PHP entry point `public/payment/gateway/digistore24/callback.php`: `define('NO_MOODLE_COOKIES', true);` + `define('NO_DEBUG_DISPLAY', true);`, load Moodle config, read raw `$_POST`, validate SHA signature with admin setting `ipn_passphrase`, then the steps in task06.
 
-**Refund / reversal — known gap (Moodle 5.2)**:
+**Refund / reversal — gap in Moodle 5.2 bridged by the plugin**:
 - `core_payment` has **no built-in reversal API** in Moodle 5.2. Search for `refund|reverse|chargeback|void` across `public/payment/` returns nothing payment-specific; `service_provider` has only `deliver_order`.
-- Consequence: there is no generic "call component to undo a payment" entry point we can hit from our refund IPN. We must bridge it ourselves.
-- Planned approach, to be implemented in task08:
-  1. The plugin marks the original Moodle payment row as reversed (own bookkeeping column in the `paygw_digistore24` table, since `payments` has no status column for this).
-  2. For `enrol_fee`: call `enrol_fee`'s enrolment plugin directly to unenrol the user (specifics to confirm in task08 against `public/enrol/fee`).
-  3. For all other components: fire a Moodle event `paygw_digistore24\event\payment_reversed` carrying `component`, `paymentarea`, `itemid`, `paymentid`, `userid`. Site operators / component authors subscribe to act on it; documented as an extension point in `02-user-doc.md`.
-  4. Admin report surfaces reversed payments so the admin can always intervene manually.
+- Approach (decided), implemented in task08:
+  1. The plugin marks the original Moodle payment row as reversed in its own bookkeeping table (`paygw_digistore24_txn`, added in task06; `payments` has no status column).
+  2. For `component = 'enrol_fee'`: call `enrol_fee`'s enrolment plugin directly to unenrol the user (confirm exact API against `public/enrol/fee/` at task-start).
+  3. For all other components: fire a Moodle event `paygw_digistore24\event\payment_reversed` carrying `component`, `paymentarea`, `itemid`, `paymentid`, `userid`. Component authors / custom plugins subscribe to act on it. Documented as an extension point in `02-user-doc.md`.
+  4. The event is fired in *all* cases (even when the enrol_fee bridge runs) so observers see every reversal.
+  5. Admin report surfaces reversed payments so an admin can always intervene manually.
 
-**Per-item `digistore24_product_id` override — known gap**:
+**Per-item `digistore24_product_id` override — gap in `\core_payment\gateway` worked around with a dedicated admin page**:
 - The `\core_payment\gateway` base class only exposes `add_configuration_to_gateway_form` (per-account), not per-payable-item. Moodle's payable item itself (`enrol_fee` instance, activity, custom) owns its price and account id but does not expose a standard "extra gateway-specific field" slot.
-- Planned approach, to be implemented in task04: keep a dedicated plugin table `paygw_digistore24_itemmap` keyed by `(component, paymentarea, itemid)` with an optional `product_id` column. Admin UI lives on a plugin-admin page under "Site administration → Plugins → Payment gateways → Digistore24 → Product mapping" (not inline on the course/activity edit form). Course editors do *not* set product ids — it's an admin-level mapping.
+- Approach (decided), implemented in task04:
+  - Dedicated plugin table `paygw_digistore24_itemmap` keyed by `(component, paymentarea, itemid)` with an optional `product_id` column.
+  - Admin UI on a plugin-admin page under "Site administration → Plugins → Payment gateways → Digistore24 → Product mapping" (not inline on course/activity edit forms).
+  - Access gated by Moodle capability `paygw/digistore24:managemapping` (defined in `db/access.php`, `captype => write`, `contextlevel => CONTEXT_SYSTEM`, default-allowed for the `manager` archetype; site administrators always have it). Admins can grant it to additional roles via the standard role permissions UI.
 
 **Currency handling**
 - Because `helper::get_available_gateways` filters by currency support, our `get_supported_currencies()` list must be a superset of every currency we expect to actually use. Keep it broad; Digistore24 will reject anything it doesn't support when we call `createBuyUrl`.

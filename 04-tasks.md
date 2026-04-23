@@ -23,15 +23,9 @@ Start every session here.
 
 ## ❓ Clarification Needed
 
-Two architectural findings from task01 (Moodle 5.2 source analysis) need product-owner confirmation before they're locked in:
+None.
 
-**clarif01 — Refund / reversal bridge**  
-Moodle 5.2 `core_payment` has no generic reversal API (`service_provider` only has `deliver_order`; `helper.php` has no `refund_order` / `reverse_order`). Proposed approach: our plugin ships an `enrol_fee`-specific unenrol bridge for auto-unenrol on refund, and for any other component fires a `paygw_digistore24\event\payment_reversed` event that component authors / custom plugins can subscribe to. Admin report always surfaces reversed payments for manual intervention.
-→ Confirm this approach (yes / no / different idea).
-
-**clarif02 — Per-item product-id override UI location**  
-The `paygw` base class has no per-payable-item form hook. Proposed approach: a dedicated admin page "Site administration → Plugins → Payment gateways → Digistore24 → Product mapping" where an admin maps `(component, paymentarea, itemid)` → `digistore24_product_id`. Course editors do *not* set product ids on course edit forms.
-→ Confirm, or request that we inline it on specific forms (e.g. for `enrol_fee` via enrol-plugin fork / patch, which we don't recommend).
+(Resolved: clarif01 → refund bridge as proposed (enrol_fee unenrol + `payment_reversed` event for other components). clarif02 → dedicated admin mapping page, gated by capability `paygw/digistore24:managemapping`, default assigned to Site administrator and Manager; further roles grantable via the standard role permissions UI.)
 
 ---
 
@@ -106,25 +100,33 @@ Admin can enter all required credentials and defaults; values are persisted; sec
 
 ---
 
-### task04 Per-item product-id override (admin mapping page)
-Status: blocked by clarif02  
+### task04 Per-item product-id override (admin mapping page, capability-gated)
+Status: open  
 Feature: feat01  
 Depends on: task02
 
 **Goal**  
-Let an admin map any Moodle payable item to a specific Digistore24 product, with fallback to the site-wide default.
+Let an authorised user (admins by default, manager role also out-of-the-box, plus any other role granted the capability) map any Moodle payable item to a specific Digistore24 product, with fallback to the site-wide default.
 
-**Why it's different from the original plan**  
-Moodle 5.2's `\core_payment\gateway` base class has no per-payable-item form hook, so we can't inject a field into the course / activity edit form in a clean way. The override therefore lives on a dedicated plugin-admin mapping page (see clarif02).
+**Why a dedicated page (not inline)**  
+Moodle 5.2's `\core_payment\gateway` exposes no per-payable-item form hook, so a clean inline field on course / activity edit forms isn't possible without forking core. The mapping lives on its own plugin-admin page.
 
-**Steps** (run once clarif02 is confirmed)
-- Create table `paygw_digistore24_itemmap` in `db/install.xml`: `id`, `component`, `paymentarea`, `itemid`, `product_id` (varchar), `timemodified`. Unique key on `(component, paymentarea, itemid)`.
-- Add admin page under "Site administration → Plugins → Payment gateways → Digistore24 → Product mapping" with list + add/edit/delete mapping rows.
-- Filter the picker to items that actually use the Digistore24 gateway (joined against `payments` / `payment_accounts` metadata).
-- Resolution helper: `paygw_digistore24\helper::resolve_product_id($component, $paymentarea, $itemid): string` → mapping if set, else `default_product_id` admin setting.
+**Steps**
+- `db/install.xml` — create table `paygw_digistore24_itemmap`: `id`, `component` (varchar), `paymentarea` (varchar), `itemid` (int), `product_id` (varchar), `timemodified` (int). Unique key on `(component, paymentarea, itemid)`.
+- `db/access.php` — define capability `paygw/digistore24:managemapping`:
+  - `captype => 'write'`
+  - `contextlevel => CONTEXT_SYSTEM`
+  - default archetypes: `manager` and (implicitly) `siteadmin` → `CAP_ALLOW`.
+  - lang strings `paygw/digistore24:managemapping` + description in `lang/en/paygw_digistore24.php` and `lang/de/...`.
+- Admin page under "Site administration → Plugins → Payment gateways → Digistore24 → Product mapping":
+  - `require_login()` + `require_capability('paygw/digistore24:managemapping', context_system::instance())`.
+  - List view with filter (by component / paymentarea / mapped vs unmapped).
+  - Add / edit / delete mapping rows; the picker for `(component, paymentarea, itemid)` is restricted to items that use a payment account on which the Digistore24 gateway is enabled (joined against `payment_accounts` + `payment_gateways`).
+  - Page registered via `settings.php` with `$ADMIN->add('paymentgateways', new admin_externalpage('paygw_digistore24_mapping', ...))`.
+- Resolver: `\paygw_digistore24\helper::resolve_product_id(string $component, string $paymentarea, int $itemid): string` → mapping if set, else admin setting `default_product_id`. Throws if neither is configured (caller turns this into a learner-visible error in task05).
 
 **Expected result**  
-An admin can map any payable item to a Digistore24 product id; items without a mapping fall back to the site default.
+A user with the `paygw/digistore24:managemapping` capability can map any payable item to a Digistore24 product id; items without a mapping fall back to the site default. An admin can grant the capability to additional roles (e.g. course creators) through the standard Moodle role permissions UI without code changes.
 
 ---
 
@@ -204,14 +206,14 @@ Learner sees a consistent confirmation page on return, with no race condition be
 ---
 
 ### task08 Refund / chargeback reversal bridge
-Status: blocked by clarif01  
+Status: open  
 Feature: feat01  
 Depends on: task06
 
 **Goal**  
 On a Digistore24 refund / chargeback IPN, reverse the matching Moodle payment — without a generic core_payment reversal API, so the plugin bridges this itself.
 
-**Steps** (run once clarif01 is confirmed)
+**Steps**
 - Extend the IPN handler to recognise refund / chargeback event types.
 - Look up the original Moodle payment via the stored Digistore24 `transaction_id`; if not found, log and respond `OK` (idempotency).
 - Mark the row in our `paygw_digistore24_txn` table as `reversed` (separate from `delivered`; original row not deleted).
