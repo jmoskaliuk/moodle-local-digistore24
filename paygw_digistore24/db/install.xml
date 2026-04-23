@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB PATH="payment/gateway/digistore24/db" VERSION="20260423" COMMENT="paygw_digistore24 plugin tables"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="../../../../lib/xmldb/xmldb.xsd"
+>
+  <TABLES>
+    <TABLE NAME="paygw_digistore24_itemmap" COMMENT="Maps a Moodle payable item to a Digistore24 product id, overriding the site default.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="component" TYPE="char" LENGTH="100" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="paymentarea" TYPE="char" LENGTH="100" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="itemid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="product_id" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="component-paymentarea-itemid" UNIQUE="true" FIELDS="component, paymentarea, itemid"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="paygw_digistore24_txn" COMMENT="One row per Digistore24 transaction tied to a Moodle payment.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="paymentid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="FK to mdl_payments.id"/>
+        <FIELD NAME="transaction_id" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="order_id" TYPE="char" LENGTH="64" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="product_id" TYPE="char" LENGTH="64" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="status" TYPE="char" LENGTH="32" NOTNULL="true" SEQUENCE="false" COMMENT="delivered | reversed | failed"/>
+        <FIELD NAME="event_type" TYPE="char" LENGTH="64" NOTNULL="false" SEQUENCE="false" COMMENT="Digistore24 event that produced this row"/>
+        <FIELD NAME="amount" TYPE="number" LENGTH="20" NOTNULL="false" SEQUENCE="false" DECIMALS="8"/>
+        <FIELD NAME="currency" TYPE="char" LENGTH="3" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="period_end" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="For subscriptions: end of currently paid period (epoch seconds)"/>
+        <FIELD NAME="cancelled" TYPE="int" LENGTH="1" NOTNULL="true" SEQUENCE="false" DEFAULT="0" COMMENT="Subscription cancellation flag"/>
+        <FIELD NAME="grace_processed" TYPE="int" LENGTH="1" NOTNULL="true" SEQUENCE="false" DEFAULT="0" COMMENT="1 once the subscription end task has acted on this row"/>
+        <FIELD NAME="raw" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Redacted IPN payload for diagnostics"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="paymentid" TYPE="foreign" FIELDS="paymentid" REFTABLE="payments" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="transaction_id" UNIQUE="false" FIELDS="transaction_id"/>
+        <INDEX NAME="status" UNIQUE="false" FIELDS="status"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="paygw_digistore24_log" COMMENT="Diagnostic log of API calls and IPN events (secrets redacted).">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="kind" TYPE="char" LENGTH="32" NOTNULL="true" SEQUENCE="false" COMMENT="api_request | api_response | ipn_received | ipn_rejected | reversal | error"/>
+        <FIELD NAME="paymentid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="message" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="payload" TYPE="text" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="kind" UNIQUE="false" FIELDS="kind"/>
+        <INDEX NAME="paymentid" UNIQUE="false" FIELDS="paymentid"/>
+        <INDEX NAME="timecreated" UNIQUE="false" FIELDS="timecreated"/>
+      </INDEXES>
+    </TABLE>
+  </TABLES>
+</XMLDB>

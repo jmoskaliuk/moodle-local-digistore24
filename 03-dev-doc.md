@@ -203,68 +203,148 @@ All entries must:
 
 ---
 
-## Feature Template
-
----
-
-### [Feature Name] (featXX)
+### Digistore24 payment gateway (feat01)
 
 **Overview**  
-Short description of the implementation.
+Implemented as the Moodle 5.2 payment gateway plugin `paygw_digistore24`. The plugin lives in the repository's `paygw_digistore24/` subdirectory and is deployed to `public/payment/gateway/digistore24/` of a Moodle install. Code is structured to mirror the in-tree `paygw_paypal` reference plugin.
 
 ---
 
-**Architecture**  
-How this feature fits into the system:
+**Architecture**
 
-- components involved
-- communication patterns
+```
+   Browser              Moodle (paygw_digistore24)             Digistore24
+   ───────              ──────────────────────────             ───────────
+   Pay button  ─────►   gateways_modal.js
+                          → start_checkout (WS)  ──────────►   POST createBuyUrl
+                          ◄───── signed URL  ◄──────────────
+   redirect  ◄────────  window.location = signed URL
+                                                       ─────►   Checkout UX
+                                                                Payment
+
+                                                         ◄─── IPN (signed)
+                          callback.php
+                            verify SHA passphrase
+                            match payments.id via custom
+                            verify amount + currency
+                            insert/update paygw_digistore24_txn
+                            core_payment\helper::deliver_order
+                                → enrol_fee.deliver_order → enrol user
+                          ◄── 200 OK ──────────────────────────►
+   return.php  ◄────────  Browser comes back via thankyou_url
+                            shows "paid" once txn row exists
+                            otherwise auto-refreshes
+```
 
 ---
 
 **Components**
 
-List relevant components:
-
-- component A → role
-- component B → role
+| Path | Role |
+|------|------|
+| `paygw_digistore24/version.php` | Component metadata (`paygw_digistore24`, requires Moodle 5.2). |
+| `paygw_digistore24/classes/gateway.php` | Implements `\core_payment\gateway`: supported currencies, per-account form (brand name), validation that admin secrets are set before enable. |
+| `paygw_digistore24/settings.php` | Admin form: API key, IPN passphrase, default product id, grace period, test mode. Registers two admin external pages (mapping, report). Calls `\core_payment\helper::add_common_gateway_settings`. |
+| `paygw_digistore24/db/access.php` | Capabilities `paygw/digistore24:managemapping` (write, system) and `paygw/digistore24:viewreport` (read, system); both default-allowed for `manager` archetype. |
+| `paygw_digistore24/db/install.xml` | Tables `paygw_digistore24_itemmap`, `paygw_digistore24_txn`, `paygw_digistore24_log`. |
+| `paygw_digistore24/db/services.php` | External functions `paygw_digistore24_get_config_for_js` (read) and `paygw_digistore24_start_checkout` (write). |
+| `paygw_digistore24/db/tasks.php` | Schedules `check_subscription_endings` every hour at minute 15. |
+| `paygw_digistore24/classes/external/get_config_for_js.php` | Returns brand name, cost (with surcharge), currency for the modal. |
+| `paygw_digistore24/classes/external/start_checkout.php` | Reads payable, persists pending Moodle payment via `\core_payment\helper::save_payment`, calls `create_buy_url::execute`, returns `{redirecturl, paymentid}`. |
+| `paygw_digistore24/amd/src/gateways_modal.js` | Exports `process(component, paymentArea, itemId)`: shows a "Redirecting…" modal, calls `start_checkout`, sets `window.location`. |
+| `paygw_digistore24/amd/src/repository.js` | AJAX wrappers around the two webservices. |
+| `paygw_digistore24/classes/api/client.php` | Thin Digistore24 HTTP client (`POST https://www.digistore24.com/api/call/{APIKEY}/json/{FUNCTION}`, header `X-DS-API-KEY`). Logs each call (with secrets redacted). |
+| `paygw_digistore24/classes/api/create_buy_url.php` | Wrapper for `createBuyUrl` with `product_id`, buyer (read-only), payment plan (optional), `tracking.custom = paymentid`, thankyou + notification URLs, 24 h validity. |
+| `paygw_digistore24/classes/api/ipn_signature.php` | SHA-512 IPN signature compute + validate (key sort case-insensitive, exclude `sha_sign`, append passphrase). |
+| `paygw_digistore24/callback.php` | Public IPN endpoint. `NO_MOODLE_COOKIES` + `NO_DEBUG_DISPLAY` + `AJAX_SCRIPT`. Validates signature, matches payment, verifies amount + currency, idempotent insert/update of `paygw_digistore24_txn`, calls `\core_payment\helper::deliver_order` for payment events, runs `reversal::run` for refund/chargeback events, marks `cancelled=1` for cancellation events. |
+| `paygw_digistore24/return.php` | Thank-you page. Shows "paid" if a delivered txn row exists, otherwise auto-refreshes every 5 s. Forwards the user to `service_provider::get_success_url` after a brief notice. |
+| `paygw_digistore24/mapping.php` + `classes/form/mapping_form.php` | Admin mapping CRUD; capability-gated. |
+| `paygw_digistore24/report.php` | Admin transactions report. Joins `paygw_digistore24_txn` with `payments`. Status filter, paginated. |
+| `paygw_digistore24/classes/helper.php` | `resolve_product_id`, `digistore24_enabled_anywhere`, `log` (writes to `paygw_digistore24_log` with redacted payload), `redact` (recursive). Status constants `STATUS_DELIVERED`, `STATUS_REVERSED`, `STATUS_FAILED`. |
+| `paygw_digistore24/classes/event/payment_reversed.php` | `\core\event\base` subclass. Stable extension point: any reversal fires this event with `component`, `paymentarea`, `itemid`, `reason` in `other`. |
+| `paygw_digistore24/classes/reversal.php` | Plugin-side bridge over the missing `core_payment` reversal API. For `enrol_fee` calls `enrol_get_plugin('fee')->unenrol_user`; always fires `payment_reversed`. |
+| `paygw_digistore24/classes/task/check_subscription_endings.php` | Scheduled task. Selects delivered + cancelled rows whose `period_end + grace_period_days < now`, skips ones with a newer delivery (resubscribed), runs `reversal::run`, marks `grace_processed = 1`. |
+| `paygw_digistore24/classes/privacy/provider.php` | `\core_payment\privacy\paygw_provider`: declares the txn table + the external Digistore24 location; exports per-payment data; deletes via subquery. |
 
 ---
 
 **Data Flow**
 
-Describe how data moves:
+Checkout: `Pay button → gateways_modal.process → start_checkout WS → save_payment + createBuyUrl → redirecturl → window.location`.
 
-- trigger → processing → result
+Payment success: `Digistore24 IPN → callback.php → ipn_signature::validate → payments + paygw_digistore24_txn match → amount/currency check → upsert txn row delivered → core_payment\helper::deliver_order → component grants access`.
+
+Refund / chargeback: `Digistore24 IPN → callback.php → mark txn row reversed → reversal::run → (enrol_fee unenrol if applicable) + payment_reversed event`.
+
+Subscription cancellation: `cancellation IPN → mark txn row cancelled = 1`. Later: `check_subscription_endings cron → if period_end + grace_period < now and no fresher delivery → reversal::run + grace_processed = 1`.
 
 ---
 
-**State Management (if relevant)**
+**State Management**
 
-- how state is stored
-- how state changes
+- `payments` (core) — owned by `core_payment`, holds the Moodle payment row.
+- `paygw_digistore24_itemmap` — `(component, paymentarea, itemid) → product_id` overrides.
+- `paygw_digistore24_txn` — one row per delivered or reversed Digistore24 transaction tied to a `payments.id`. Holds `transaction_id`, `order_id`, `product_id`, `status`, `event_type`, `amount`, `currency`, `period_end`, `cancelled`, `grace_processed`, redacted `raw` payload. Indexed on `transaction_id` and `status`.
+- `paygw_digistore24_log` — diagnostic trail (`api_request`, `api_response`, `ipn_received`, `ipn_rejected`, `reversal`, `error`). Indexed on `kind`, `paymentid`, `timecreated`. Surfaced (in part) by the report; also queryable via DB.
 
 ---
 
 **Dependencies**
 
-- internal dependencies (other features, modules)
-- external dependencies (APIs, libraries)
+Internal:
+- `\core_payment\gateway`, `\core_payment\helper`, `\core_payment\local\callback\service_provider` (Moodle 5.2 — see top of this section).
+- `\enrol_fee` enrolment plugin: `enrol_get_plugin('fee')->unenrol_user(...)` (used by the reversal bridge for `enrol_fee` payments).
+- `\core\event\base`, `\core\task\scheduled_task`.
+
+External:
+- Digistore24 JSON API (`createBuyUrl`).
+- Digistore24 IPN POST (one webhook with multiple event types).
 
 ---
 
 **Constraints / Limitations**
 
-- known issues
-- technical limitations
-- edge-case behavior
+- The reversal bridge only auto-acts for `component = 'enrol_fee'`. For any other component the `payment_reversed` event is fired and the row is marked reversed, but no built-in unenrol / undeliver runs (Moodle 5.2 has no generic reversal API). Admin report surfaces every reversal so manual intervention is always possible.
+- The mapping page admits any `(component, paymentarea, itemid)` triple a Manager types — there is no picker that browses Moodle items yet (would need component-specific resolvers; deferred).
+- The plugin's own `paygw_digistore24_log` table has no automatic pruning; admin should plan log retention if traffic is high.
 
 ---
 
-**Notes (optional)**
+**Notes**
 
-- implementation details worth knowing
-- unusual decisions
+- The `start_checkout` webservice is the only place a Moodle pending payment is created. The IPN handler never creates payment rows on its own — an IPN with an unknown `custom` is rejected.
+- All API requests, IPN bodies and rejections are logged with secrets (API key, SHA passphrase, `sha_sign`) replaced by `[redacted]`.
+- The Digistore24 `custom` field carries the Moodle `payments.id` only — no extra context. Stays well within the 127-char limit.
+
+---
+
+# Open Questions for Product Owner
+
+Captured while implementing tasks 02–13; none of them block deployment in test mode but each may need a real-world adjustment before going live.
+
+1. **Digistore24 `createBuyUrl` parameter shape** — the wrapper builds `{product_id, buyer, payment_plan, tracking, valid_until, urls, settings}`. The exact JSON keys (e.g. `urls.thankyou_url` vs `urls.thank_you_url`, the `buyer_readonly` array key) are inferred from the public docs and need verification on the first sandbox call. If Digistore24 returns an error, the API client logs the exact response which will tell us.
+
+2. **Digistore24 IPN signature algorithm** — implementation follows the standard Digistore24 IPN PHP receiver scheme (uksort case-insensitive, drop `sha_sign`, join values with the passphrase, append the passphrase, SHA-512, uppercase hex). If your Digistore24 vendor account uses a different SHA scheme (e.g. SHA-256, different separator), `paygw_digistore24/classes/api/ipn_signature.php` is the only file to adjust.
+
+3. **Subscription IPN field names** — `callback.php` reads `next_payment_at` for `period_end` and uses `pay_sequence_no` to detect rebills, plus event names (`on_payment`, `on_rebill`, `on_refund`, `on_chargeback`, `on_payment_missed`, `on_affiliation_cancelled`, `connection_test`, `on_revoked`). Confirm against the IPN field reference for your account; rename if needed.
+
+4. **`createBuyUrl` payment_plan** — `start_checkout` currently passes `null`. To actually create a Digistore24 subscription from Moodle we need to know:
+   - Which Moodle attribute on the payable item indicates "this is a subscription"? (`enrol_fee` only has `enrolperiod`, which is one-shot.)
+   - What `payment_plan` shape does Digistore24 expect (`first_amount`, `other_amounts_count`, `interval`, `interval_unit` …)?
+   Until confirmed, sales go through as one-off; the subscription bridge in `callback.php` and the scheduled task work but there's no Moodle-side trigger to ask Digistore24 for a payment plan.
+
+5. **Buyer fields and `buyer_readonly`** — we send email, first name, last name, country and request that they be read-only at checkout. If Digistore24 expects different field names (`firstname` vs `first_name`, etc.) or a different way to lock fields, the createBuyUrl wrapper needs adjusting. Same place to fix.
+
+6. **Repo name vs plugin component** — the repo is `moodle-local-digistore24`, the plugin is `paygw_digistore24`. Two plausible long-term shapes:
+   - **(A)** Rename the repo to `moodle-paygw_digistore24` and move the plugin to repo root (standard moodle.org plugin layout); the eLeDia.OS docs move into a `docs/` subdir.
+   - **(B)** Keep two plugins: `local_digistore24` (admin tooling, libraries) at repo root and `paygw_digistore24` in a subdir, repo name unchanged.
+   For now the plugin code lives in `paygw_digistore24/` and the docs at the repo root.
+
+7. **enrol_fee unenrol semantics** — `enrol_get_plugin('fee')->unenrol_user($instance, $userid)` follows the standard Moodle enrol plugin API. Should refunds also delete progress / grades / certificates issued during the paid period, or only revoke enrolment? Current behaviour: unenrol only.
+
+8. **Log retention** — `paygw_digistore24_log` grows unbounded. Need an admin setting (e.g. "keep N days") and a small purge step inside the existing scheduled task? Not done in v1.
+
+9. **Currency support list** — currently mirrored from PayPal's gateway plus EUR. If Digistore24 supports more (or fewer) currencies, edit `gateway::get_supported_currencies`.
 
 ---
 

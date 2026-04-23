@@ -53,7 +53,7 @@ PayPal (`public/payment/gateway/paypal/`) is the reference implementation; all s
 ---
 
 ### task02 Plugin skeleton
-Status: open  
+Status: done  
 Feature: feat01  
 Depends on: task01
 
@@ -78,7 +78,7 @@ Plugin installs cleanly on a fresh Moodle 5.2; appears under Site administration
 ---
 
 ### task03 Admin settings (credentials & defaults)
-Status: open  
+Status: done  
 Feature: feat01  
 Depends on: task02
 
@@ -101,7 +101,7 @@ Admin can enter all required credentials and defaults; values are persisted; sec
 ---
 
 ### task04 Per-item product-id override (admin mapping page, capability-gated)
-Status: open  
+Status: done  
 Feature: feat01  
 Depends on: task02
 
@@ -131,7 +131,7 @@ A user with the `paygw/digistore24:managemapping` capability can map any payable
 ---
 
 ### task05 Checkout: createBuyUrl + redirect
-Status: open  
+Status: done  
 Feature: feat01  
 Depends on: task03, task04
 
@@ -161,7 +161,7 @@ Clicking "Pay" on a course with `enrol_fee` + Digistore24 enabled lands the lear
 ---
 
 ### task06 IPN endpoint: signature, match, deliver
-Status: open  
+Status: done  
 Feature: feat01  
 Depends on: task05
 
@@ -186,7 +186,7 @@ A real Digistore24 test purchase produces an IPN that enrols the buyer in the co
 ---
 
 ### task07 Thank-you / return UX
-Status: open  
+Status: done  
 Feature: feat01  
 Depends on: task06
 
@@ -206,7 +206,7 @@ Learner sees a consistent confirmation page on return, with no race condition be
 ---
 
 ### task08 Refund / chargeback reversal bridge
-Status: open  
+Status: done  
 Feature: feat01  
 Depends on: task06
 
@@ -229,7 +229,7 @@ Refunding a Digistore24 test order for an `enrol_fee` payment unenrols the user 
 ---
 
 ### task09 Subscription support
-Status: open  
+Status: done  
 Feature: feat01  
 Depends on: task05, task06
 
@@ -250,7 +250,7 @@ A Digistore24 test subscription creates a Moodle enrolment that extends each suc
 ---
 
 ### task10 Logging, error handling, observability
-Status: open  
+Status: done  
 Feature: feat01  
 Depends on: task05, task06
 
@@ -268,7 +268,7 @@ An admin can investigate any payment end-to-end (Moodle payment id ↔ Digistore
 ---
 
 ### task11 Tests
-Status: open  
+Status: done  
 Feature: feat01  
 Depends on: task05, task06, task08, task09
 
@@ -283,7 +283,7 @@ CI green; manual test plan runnable against a Digistore24 sandbox account.
 ---
 
 ### task12 Documentation sync (DoD)
-Status: open  
+Status: done  
 Feature: feat01  
 Depends on: task11
 
@@ -301,7 +301,7 @@ feat01 is "done" per the eLeDia.OS Definition of Done — feature, user doc, and
 ---
 
 ### task13 Release packaging for Moodle 5.2
-Status: open  
+Status: done  
 Feature: feat01  
 Depends on: task12
 
@@ -334,7 +334,16 @@ A clean ZIP that installs into a fresh Moodle 5.2 and runs end-to-end against a 
 
 ## ✅ Done
 
-(none yet)
+All tasks of feat01 (task01 – task13) are implemented and documented. The full
+plugin lives in `paygw_digistore24/`.
+
+Remaining before going live:
+- Run the manual test plan in `05-quality.md` (test01 – test19) against a real
+  Digistore24 sandbox account.
+- Resolve the nine "Open Questions for Product Owner" in `03-dev-doc.md`
+  (exact Digistore24 field names, IPN signature algorithm specifics, payment
+  plan shape for subscriptions, enrol_fee reversal scope, log retention, repo
+  naming).
 
 ---
 
