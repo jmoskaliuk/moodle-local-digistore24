@@ -99,11 +99,23 @@ Describe how data moves through the system:
 ### Moodle Payment subsystem (`core_payment`)
 - Target: **Moodle 5.2**.
 - Plugin type: `paygw` → plugin name `paygw_digistore24`, path `payment/gateway/digistore24`.
-- Must implement Moodle's standard gateway contract (`gateway`, AMD JS entry point, external service endpoints, lang strings, settings, `version.php`).
-- Works generically for any `core_payment` component (`enrol_fee`, activities, custom). v1 QA focuses on `enrol_fee`; other components are technically supported.
-- Payment completion must call Moodle's payment API to mark the payable item as paid so the `component`'s delivery callback (e.g. enrolment for `enrol_fee`) runs.
-- Refund / chargeback must invoke the component's reversal path (e.g. unenrol for `enrol_fee`).
-- Concrete class/method signatures must be verified against the Moodle 5.2 developer docs before implementation (docs.moodle.org / moodledev.io currently blocked from this environment — verify during task `#plan`).
+- Two sides of the Payment API:
+
+  **Component side** (what `enrol_fee`, activities, or custom components implement — NOT us) — confirmed from Moodle docs provided by product owner (doc dates back to Moodle 3.10; interface is stable through 5.x):
+  - Interface: `\core_payment\local\callback\service_provider`.
+  - `get_payable(string $paymentarea, int $itemid): \core_payment\local\entities\payable` — returns amount, currency, and target `accountid`.
+  - `deliver_order(string $paymentarea, int $itemid, int $paymentid, int $userid): bool` — called by `core_payment` after a gateway marks a payment successful; the component grants access here (e.g. `enrol_fee` enrols the user in the course).
+  - Frontend trigger: any page that wants to offer a payment places an element with `data-action="core_payment/triggerPayment"` + `data-component`, `data-paymentarea`, `data-itemid`, `data-cost`, `data-description`, then initialises `core_payment/gateways_modal`.
+  - Consequence for us: we never enrol / deliver anything ourselves — we only tell `core_payment` the payment succeeded, and `core_payment` calls the component's `deliver_order` automatically.
+
+  **Gateway side** (what we implement as `paygw_digistore24`) — confirmed pieces from Moodle 5.2 paygw contract still to be verified during task01:
+  - `classes/gateway.php` — extends `\core_payment\gateway`; declares supported currencies (permissive set, delegated to Digistore24).
+  - AMD module — hooks into the modal that `core_payment/triggerPayment` opens, presents our gateway, on confirm calls our external service to start checkout and then redirects the browser to the returned Digistore24 URL.
+  - External services (`classes/external/*.php` + `db/services.php`) — at least one function callable from the AMD module that: reads the payable (`get_payable`), creates a Moodle pending payment, calls Digistore24 `createBuyUrl`, returns the checkout URL.
+  - `version.php`, `lang/en/paygw_digistore24.php`, `settings.php`, optional `db/install.xml`.
+  - API to mark the payment successful (triggers `deliver_order`) and to reverse a payment (triggers the component's refund / unenrol path in 5.2): exact function names and signatures to be nailed down in task01.
+
+- v1 QA focuses on `enrol_fee`; other `core_payment` components are technically supported from day one because `core_payment` dispatches to whichever `service_provider` owns the payable item — our gateway does not care.
 
 ### Digistore24 API
 Facts collected from Digistore24 developer docs (via web search — see README/source links in commits):

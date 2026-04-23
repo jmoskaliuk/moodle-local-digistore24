@@ -34,24 +34,35 @@ Order is the recommended implementation sequence: each task builds on the previo
 
 ---
 
-### task01 Verify Moodle 5.2 paygw contract
-Status: open  
+### task01 Verify Moodle 5.2 paygw gateway contract
+Status: in progress  
 Feature: feat01  
 Depends on: —
 
 **Goal**  
-Pin down the exact Moodle 5.2 payment-gateway plugin contract before writing code, so subsequent tasks build on confirmed signatures (not guesses).
+Pin down the exact Moodle 5.2 payment-*gateway* plugin contract so subsequent tasks build on confirmed signatures, not guesses.
+
+**Already known (product owner supplied Moodle Payment API doc, confirmed for the component side):**
+- Component-side interface: `\core_payment\local\callback\service_provider` with `get_payable` and `deliver_order` — documented in `03-dev-doc.md`. We do NOT implement this; we invoke the payment API so Moodle calls it on the component.
+- Frontend entry: `data-action="core_payment/triggerPayment"` + AMD `core_payment/gateways_modal` opens Moodle's payment modal. Our gateway's AMD module plugs into that modal.
+
+**Still to confirm (gateway side, Moodle 5.2-specific):**
+- Exact base class / interface for `classes/gateway.php` (methods like `get_supported_currencies`, `get_gateway_configuration`, etc.).
+- The AMD-to-backend contract used by `core_payment/gateways_modal` for gateway plugins: which AMD module name our plugin must expose, what it must return, and which external service function starts checkout.
+- The exact API call to mark a payment successful that triggers `service_provider::deliver_order` (candidate name: `\core_payment\helper::deliver_order` or similar — verify).
+- The API for payment reversal in 5.2 (did `service_provider` grow a `refund_order` / `reverse_order` method? Or is reversal handled via a separate helper?).
+- How per-item gateway settings forms are registered (for the `digistore24_product_id` override in task04) — the `gateway` base class typically exposes a hook for this.
+- Minimum `version.php` `$plugin->requires` for Moodle 5.2.
 
 **Steps**
-- Read the Moodle 5.2 payment-gateway docs on moodledev.io (currently 403 from this environment — fetch locally or via a proxy).
-- Identify, with file paths and method signatures, what `paygw_*` plugins must implement: `classes/gateway.php`, `amd/src/gateways_modal.js` (or equivalent), `classes/external/*` services, `lang/en/paygw_<name>.php`, `settings.php`, `version.php`.
-- Identify the exact API call(s) used to mark a payment as `delivered` and to trigger reversal.
-- Confirm how Moodle hands off payable-item context (`component`, `paymentarea`, `itemid`, amount, currency, user) to a gateway.
-- Confirm how the per-item gateway settings form is provided (for the `digistore24_product_id` override UI).
+- Fetch the Moodle 5.2 Payment API + paygw plugin pages from moodledev.io (403 from this sandbox; fetch from product owner's environment).
+- Inspect an existing in-tree gateway in a Moodle 5.2 checkout for reference: `payment/gateway/paypal/`. Note its class names, AMD modules, external services.
+- Record every confirmed signature in `03-dev-doc.md → External Dependencies → Moodle Payment subsystem → Gateway side`.
+- Flag any deviation from current assumptions; back-port to `01-features.md` if behavior changes.
 
 **Expected result**
-- Notes added to `03-dev-doc.md → External Dependencies → Moodle Payment subsystem` with concrete class/method names for Moodle 5.2.
-- Any deviations from the assumptions in this document recorded as decisions (or back-ported into `01-features.md` if behavior changes).
+- `03-dev-doc.md` gateway-side section replaces "to be verified" items with concrete names / paths.
+- No remaining guesswork before task02.
 
 ---
 
