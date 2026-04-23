@@ -23,7 +23,15 @@ Start every session here.
 
 ## ❓ Clarification Needed
 
-None.
+Two architectural findings from task01 (Moodle 5.2 source analysis) need product-owner confirmation before they're locked in:
+
+**clarif01 — Refund / reversal bridge**  
+Moodle 5.2 `core_payment` has no generic reversal API (`service_provider` only has `deliver_order`; `helper.php` has no `refund_order` / `reverse_order`). Proposed approach: our plugin ships an `enrol_fee`-specific unenrol bridge for auto-unenrol on refund, and for any other component fires a `paygw_digistore24\event\payment_reversed` event that component authors / custom plugins can subscribe to. Admin report always surfaces reversed payments for manual intervention.
+→ Confirm this approach (yes / no / different idea).
+
+**clarif02 — Per-item product-id override UI location**  
+The `paygw` base class has no per-payable-item form hook. Proposed approach: a dedicated admin page "Site administration → Plugins → Payment gateways → Digistore24 → Product mapping" where an admin maps `(component, paymentarea, itemid)` → `digistore24_product_id`. Course editors do *not* set product ids on course edit forms.
+→ Confirm, or request that we inline it on specific forms (e.g. for `enrol_fee` via enrol-plugin fork / patch, which we don't recommend).
 
 ---
 
@@ -35,34 +43,18 @@ Order is the recommended implementation sequence: each task builds on the previo
 ---
 
 ### task01 Verify Moodle 5.2 paygw gateway contract
-Status: in progress  
+Status: done  
 Feature: feat01  
 Depends on: —
 
-**Goal**  
-Pin down the exact Moodle 5.2 payment-*gateway* plugin contract so subsequent tasks build on confirmed signatures, not guesses.
+**Outcome**  
+Resolved by reading the Moodle 5.2 source (`MOODLE_502_STABLE`, `public/payment/`): base class `\core_payment\gateway`, `service_provider` interface, `helper::save_payment` + `helper::deliver_order`, external-service conventions, AMD module path `paygw_<name>/gateways_modal` with `process(component, paymentArea, itemId, description)`. Full concrete contract recorded in `03-dev-doc.md → External Dependencies → Moodle Payment subsystem`.
 
-**Already known (product owner supplied Moodle Payment API doc, confirmed for the component side):**
-- Component-side interface: `\core_payment\local\callback\service_provider` with `get_payable` and `deliver_order` — documented in `03-dev-doc.md`. We do NOT implement this; we invoke the payment API so Moodle calls it on the component.
-- Frontend entry: `data-action="core_payment/triggerPayment"` + AMD `core_payment/gateways_modal` opens Moodle's payment modal. Our gateway's AMD module plugs into that modal.
+Two architectural findings now tracked under "Clarification Needed":
+- `core_payment` has **no reversal API** → refund path needs a plugin-level bridge (see clarif01).
+- `\core_payment\gateway` has **no per-item form hook** → product-id override must live on a plugin-admin mapping page (see clarif02).
 
-**Still to confirm (gateway side, Moodle 5.2-specific):**
-- Exact base class / interface for `classes/gateway.php` (methods like `get_supported_currencies`, `get_gateway_configuration`, etc.).
-- The AMD-to-backend contract used by `core_payment/gateways_modal` for gateway plugins: which AMD module name our plugin must expose, what it must return, and which external service function starts checkout.
-- The exact API call to mark a payment successful that triggers `service_provider::deliver_order` (candidate name: `\core_payment\helper::deliver_order` or similar — verify).
-- The API for payment reversal in 5.2 (did `service_provider` grow a `refund_order` / `reverse_order` method? Or is reversal handled via a separate helper?).
-- How per-item gateway settings forms are registered (for the `digistore24_product_id` override in task04) — the `gateway` base class typically exposes a hook for this.
-- Minimum `version.php` `$plugin->requires` for Moodle 5.2.
-
-**Steps**
-- Fetch the Moodle 5.2 Payment API + paygw plugin pages from moodledev.io (403 from this sandbox; fetch from product owner's environment).
-- Inspect an existing in-tree gateway in a Moodle 5.2 checkout for reference: `payment/gateway/paypal/`. Note its class names, AMD modules, external services.
-- Record every confirmed signature in `03-dev-doc.md → External Dependencies → Moodle Payment subsystem → Gateway side`.
-- Flag any deviation from current assumptions; back-port to `01-features.md` if behavior changes.
-
-**Expected result**
-- `03-dev-doc.md` gateway-side section replaces "to be verified" items with concrete names / paths.
-- No remaining guesswork before task02.
+PayPal (`public/payment/gateway/paypal/`) is the reference implementation; all subsequent tasks reference it rather than guessing.
 
 ---
 
@@ -74,14 +66,20 @@ Depends on: task01
 **Goal**  
 Create a minimal installable `paygw_digistore24` plugin so Moodle 5.2 recognises it.
 
-**Steps**
-- Create directory `payment/gateway/digistore24/` with: `version.php`, `lang/en/paygw_digistore24.php`, `classes/gateway.php` (extending the Moodle base gateway), empty `settings.php`, `db/install.xml` placeholder if any plugin-owned tables are needed.
-- `version.php`: `$plugin->component = 'paygw_digistore24'`, `$plugin->requires` set for Moodle 5.2.
-- Stub `gateway` class: declare supported currencies as a permissive set (delegated to Digistore24) and a no-op `validate_data` for now.
-- Verify the plugin shows up in `Site administration → Plugins → Payment gateways` after install.
+**Steps**  
+Mirror `public/payment/gateway/paypal/` structure. Create `public/payment/gateway/digistore24/` with:
+- `version.php` — `$plugin->component = 'paygw_digistore24'`, `$plugin->requires = 2026041000` (Moodle 5.2).
+- `lang/en/paygw_digistore24.php`, `lang/de/paygw_digistore24.php` — at minimum `pluginname` and `gatewaydescription`.
+- `classes/gateway.php` extending `\core_payment\gateway`:
+  - `get_supported_currencies()` — permissive set (start with PayPal's list).
+  - `add_configuration_to_gateway_form($form)` — per-account gateway config (leave empty for now; populated in task03).
+  - override `validate_gateway_form(...)` to allow enable once basic config is entered.
+- `settings.php` — empty scaffold; populated in task03. Call `\core_payment\helper::add_common_gateway_settings($settings, 'digistore24')` at the bottom for the common `surcharge` setting.
+- `classes/privacy/provider.php` — minimum implementation (null-provider or local metadata per PayPal).
+- No `db/install.xml` yet — table added in task04 (`paygw_digistore24_itemmap`) and/or task06 (order-id bookkeeping).
 
 **Expected result**  
-Plugin installs cleanly on a fresh Moodle 5.2; appears in the gateway list; can be enabled on a payment account; no behavior yet.
+Plugin installs cleanly on a fresh Moodle 5.2; appears under Site administration → Plugins → Payment gateways; can be enabled on a payment account; no behavior yet.
 
 ---
 
@@ -108,21 +106,25 @@ Admin can enter all required credentials and defaults; values are persisted; sec
 
 ---
 
-### task04 Per-item product-id override UI
-Status: open  
+### task04 Per-item product-id override (admin mapping page)
+Status: blocked by clarif02  
 Feature: feat01  
 Depends on: task02
 
 **Goal**  
-Let any Moodle payable item (enrol_fee, activity, custom component) set its own `digistore24_product_id` instead of falling back to the site-wide default.
+Let an admin map any Moodle payable item to a specific Digistore24 product, with fallback to the site-wide default.
 
-**Steps**
-- Implement the per-payment-area settings form hook the Moodle 5.2 paygw contract exposes (confirmed in task01) — single field `digistore24_product_id` (string, optional).
-- Persist the override in the plugin's per-item settings store provided by `core_payment` (no custom DB table if Moodle provides one).
-- Resolution helper: `resolve_product_id($component, $paymentarea, $itemid)` → override if set, else `default_product_id` from admin settings.
+**Why it's different from the original plan**  
+Moodle 5.2's `\core_payment\gateway` base class has no per-payable-item form hook, so we can't inject a field into the course / activity edit form in a clean way. The override therefore lives on a dedicated plugin-admin mapping page (see clarif02).
+
+**Steps** (run once clarif02 is confirmed)
+- Create table `paygw_digistore24_itemmap` in `db/install.xml`: `id`, `component`, `paymentarea`, `itemid`, `product_id` (varchar), `timemodified`. Unique key on `(component, paymentarea, itemid)`.
+- Add admin page under "Site administration → Plugins → Payment gateways → Digistore24 → Product mapping" with list + add/edit/delete mapping rows.
+- Filter the picker to items that actually use the Digistore24 gateway (joined against `payments` / `payment_accounts` metadata).
+- Resolution helper: `paygw_digistore24\helper::resolve_product_id($component, $paymentarea, $itemid): string` → mapping if set, else `default_product_id` admin setting.
 
 **Expected result**  
-On any payable item bound to a payment account that has Digistore24 enabled, an admin can enter a Digistore24 product id; empty field falls back to the site default.
+An admin can map any payable item to a Digistore24 product id; items without a mapping fall back to the site default.
 
 ---
 
@@ -132,22 +134,27 @@ Feature: feat01
 Depends on: task03, task04
 
 **Goal**  
-When the learner picks Digistore24 in Moodle's payment dialog, call `createBuyUrl` and redirect them to the resulting signed URL.
+When the learner picks Digistore24 in Moodle's payment modal, call `createBuyUrl` and redirect the browser to the resulting signed URL.
 
 **Steps**
-- Build a Digistore24 API client (`classes/api/client.php`): `POST https://www.digistore24.com/api/call/{APIKEY}/json/{FUNCTION}` with `X-DS-API-KEY` header; JSON parsing; error mapping.
-- Implement `createBuyUrl` wrapper with parameters per `03-dev-doc.md`:
-  - `product_id` from `resolve_product_id(...)`.
-  - `buyer` from the Moodle user (email, first/last name, country); pass via `settings` to make read-only.
-  - Moodle-controlled `price` / `currency` for the payable item.
-  - `tracking.custom = payment.id` (created here as a Moodle pending payment via the core API).
-  - `urls.thankyou_url` = Moodle return URL with `payment.id`; `urls.notification_url` = the IPN endpoint from task06.
+- `classes/api/client.php` — Digistore24 API client using Moodle's `\core\http_client` / `curl`: `POST https://www.digistore24.com/api/call/{APIKEY}/json/{FUNCTION}` with `X-DS-API-KEY`; JSON parsing; error mapping.
+- `classes/api/create_buy_url.php` — wrapper for `createBuyUrl` with the parameter shape from `03-dev-doc.md`:
+  - `product_id` from `\paygw_digistore24\helper::resolve_product_id(...)` (task04).
+  - `buyer` from Moodle user (email, firstname, lastname, country); pass via `settings` to make read-only.
+  - Moodle-controlled `price` / `currency` from `\core_payment\helper::get_payable(...)` (+ surcharge).
+  - `tracking.custom = payments.id` (from `\core_payment\helper::save_payment(...)` here).
+  - `urls.thankyou_url` = Moodle return page (task07) with `payment.id`; `urls.notification_url` = `callback.php` from task06.
   - `valid_until = '24h'`.
-- Wire this into the `paygw_digistore24` external service / AJAX entry point that Moodle's payment modal calls.
-- On success, return the URL to the front-end so Moodle redirects the learner; on failure, surface a clear error and keep the Moodle payment in `pending` state (do not delete it; needed for diagnostics).
+- `classes/external/start_checkout.php` (webservice `paygw_digistore24_start_checkout`, `write`, `ajax => true`, `loginrequired => true`):
+  - validates params (`component`, `paymentarea`, `itemid`),
+  - calls `helper::save_payment` to create the pending Moodle payment,
+  - calls the `createBuyUrl` wrapper,
+  - returns `{ redirecturl: string }`.
+- `amd/src/gateways_modal.js` exposing `process(component, paymentArea, itemId, description)`: show a "Redirecting to Digistore24…" modal, call the webservice, then `window.location = result.redirecturl`.
+- On failure: keep the Moodle payment row (status stays pending), surface the error string in the modal, do not redirect.
 
 **Expected result**  
-Clicking "Pay" on a course with `enrol_fee` + Digistore24 enabled lands the learner on a real Digistore24 checkout page with the right product, price, currency, pre-filled (read-only) buyer data, and a `custom` value matching the Moodle pending payment id.
+Clicking "Pay" on a course with `enrol_fee` + Digistore24 enabled lands the learner on a real Digistore24 checkout page with the right product, price, currency, pre-filled (read-only) buyer data, and a `custom` value matching the Moodle pending `payments.id`.
 
 ---
 
@@ -160,13 +167,16 @@ Depends on: task05
 Receive Digistore24 IPNs, validate them, and tell Moodle the matching payment is paid so the component's delivery callback runs.
 
 **Steps**
-- Create a publicly reachable script (no Moodle login required) that accepts the Digistore24 POST.
-- Validate the SHA-passphrase signature using `ipn_passphrase` from admin settings; reject (HTTP 400, log) on mismatch.
-- Resolve the Moodle payment via `custom` → `payment.id`. Reject (log) if missing or already terminal.
-- Verify `currency` and `amount` against the Moodle pending payment; mismatch → reject and log.
-- Idempotency: if the payment is already `delivered` for this Digistore24 transaction id, return success without doing anything.
-- Mark the payment delivered via the Moodle core payment API → `core_payment` triggers the component's delivery callback (e.g. `enrol_fee` enrols the user).
-- Always respond `OK` on success so Digistore24 doesn't retry.
+- `public/payment/gateway/digistore24/callback.php` — standalone entry, NOT a webservice:
+  - `define('NO_MOODLE_COOKIES', true);` `define('NO_DEBUG_DISPLAY', true);`
+  - `require(__DIR__ . '/../../../config.php');`
+- Validate the SHA-passphrase signature using admin setting `ipn_passphrase`; reject (HTTP 400 + log) on mismatch. Must run BEFORE any side effect.
+- Resolve the Moodle payment via `custom` → `payments.id`. Reject (log) if missing.
+- Verify `currency` and `amount` against the `payments` row; mismatch → reject and log, do not deliver.
+- Persist the Digistore24 `transaction_id` (and `order_id`) in our own bookkeeping table (`paygw_digistore24_txn`, added here via `db/install.xml`): one row per delivered / reversed payment.
+- Idempotency: if an identical `transaction_id` is already recorded as delivered, return `OK` without side effect.
+- Call `\core_payment\helper::deliver_order($component, $paymentarea, $itemid, $paymentid, $userid)` → `core_payment` runs the component's `deliver_order`.
+- Always respond `OK` on success so Digistore24 does not retry.
 
 **Expected result**  
 A real Digistore24 test purchase produces an IPN that enrols the buyer in the corresponding course and is visible in Moodle's payment log. Replaying the same IPN does not double-enrol.
@@ -193,22 +203,26 @@ Learner sees a consistent confirmation page on return, with no race condition be
 
 ---
 
-### task08 Refund / chargeback handling
-Status: open  
+### task08 Refund / chargeback reversal bridge
+Status: blocked by clarif01  
 Feature: feat01  
 Depends on: task06
 
 **Goal**  
-On a Digistore24 refund or chargeback IPN, reverse the matching Moodle payment so the component (e.g. `enrol_fee`) unenrols the user.
+On a Digistore24 refund / chargeback IPN, reverse the matching Moodle payment — without a generic core_payment reversal API, so the plugin bridges this itself.
 
-**Steps**
-- Extend the IPN handler from task06 to recognise refund / chargeback event types from Digistore24.
-- Locate the original Moodle payment via Digistore24 transaction id (stored on the original delivery).
-- Call the Moodle core payment API to reverse the payment so `core_payment` invokes the component's reversal path.
-- Log the action; do not silently swallow failures.
+**Steps** (run once clarif01 is confirmed)
+- Extend the IPN handler to recognise refund / chargeback event types.
+- Look up the original Moodle payment via the stored Digistore24 `transaction_id`; if not found, log and respond `OK` (idempotency).
+- Mark the row in our `paygw_digistore24_txn` table as `reversed` (separate from `delivered`; original row not deleted).
+- Component-specific reversal:
+  - `component = 'enrol_fee'` → call `enrol_fee`'s enrolment plugin to unenrol the user (confirm exact API by reading `public/enrol/fee/` at task-start).
+  - any other component → fire `paygw_digistore24\event\payment_reversed` with `component`, `paymentarea`, `itemid`, `paymentid`, `userid`; no further action.
+- Fire `\paygw_digistore24\event\payment_reversed` in all cases (so observers see every reversal, not only non-`enrol_fee` ones).
+- Admin report from task10 surfaces reversed payments.
 
 **Expected result**  
-Refunding a Digistore24 test order unenrols the user from the related course (or runs the equivalent reversal for other components).
+Refunding a Digistore24 test order for an `enrol_fee` payment unenrols the user from the related course. A refund on any other component produces the `payment_reversed` event and a reversed-status row, ready for custom handling.
 
 ---
 
